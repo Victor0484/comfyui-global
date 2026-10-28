@@ -1,0 +1,27 @@
+# New suggested Global Volume layout: /workspace/models/...
+global_models:
+  base_path: /workspace
+  checkpoints: models/checkpoints
+  diffusion_models: models/diffusion_models
+  text_encoders: models/text_encoders
+  clip: models/clip
+  clip_vision: models/clip_vision
+  loras: models/loras
+  vae: models/vae
+  controlnet: models/controlnet
+  upscale_models: models/upscale_models
+  embeddings: models/embeddings
+
+# Compatibility with models on your old Pod's Global Volume mount:
+legacy_models:
+  base_path: /workspace/runpod-slim/ComfyUI
+  checkpoints: models/checkpoints
+  diffusion_models: models/diffusion_models
+  text_encoders: models/text_encoders
+  clip: models/clip
+  clip_vision: models/clip_vision
+  loras: models/loras
+  vae: models/vae
+  controlnet: models/controlnet
+  upscale_models: models/upscale_models
+  embeddings: models/embeddings
