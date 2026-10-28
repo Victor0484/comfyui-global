@@ -3,7 +3,9 @@ name: Build and publish ComfyUI Docker image
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - pulid-test
   workflow_dispatch:
 
 jobs:
@@ -12,11 +14,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Free disk space for the CUDA image
+      - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/powershell /usr/local/.ghcup
           df -h
@@ -31,12 +34,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set lowercase image tag
+      - name: Set image tag
         run: |
           OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE=ghcr.io/${OWNER}/comfyui-global:latest" >> "$GITHUB_ENV"
 
-      - name: Build and push image
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            TAG=latest
+          elif [ "$GITHUB_REF_NAME" = "pulid-test" ]; then
+            TAG=pulid-test
+          else
+            exit 1
+          fi
+
+          echo "IMAGE=ghcr.io/${OWNER}/comfyui-global:${TAG}" >> "$GITHUB_ENV"
+
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
