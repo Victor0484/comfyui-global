@@ -11,6 +11,7 @@ global_models:
   controlnet: models/controlnet
   upscale_models: models/upscale_models
   embeddings: models/embeddings
+  pulid: models/pulid
 
 # Compatibility with models on your old Pod's Global Volume mount:
 legacy_models:
@@ -25,3 +26,4 @@ legacy_models:
   controlnet: models/controlnet
   upscale_models: models/upscale_models
   embeddings: models/embeddings
+  pulid: models/pulid
