@@ -19,6 +19,8 @@ RUN python3.12 /tmp/patch-pulid.py && rm /tmp/patch-pulid.py
 
 # These three files already exist on the user's working main branch.
 COPY --chmod=755 start-comfy.sh /usr/local/bin/start-comfy-global
+RUN sed -i 's/\r$//' /usr/local/bin/start-comfy-global \
+    && /bin/bash -n /usr/local/bin/start-comfy-global
 COPY extra_model_paths.yaml /etc/comfyui/extra_model_paths.yaml
 COPY --chmod=755 backup-comfy-data.sh /usr/local/bin/backup-comfy-data
 
