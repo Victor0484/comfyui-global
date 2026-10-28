@@ -24,4 +24,4 @@ COPY --chmod=755 backup-comfy-data.sh /usr/local/bin/backup-comfy-data
 
 WORKDIR /opt/comfyui-baked
 EXPOSE 8188 8888
-ENTRYPOINT ["/usr/local/bin/start-comfy-global"]
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/start-comfy-global"]
