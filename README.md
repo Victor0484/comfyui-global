@@ -1,56 +1,153 @@
-# ComfyUI on Runpod: only Container Disk + Global Volume
+# ComfyUI ReActor (ohne NSFW-Filter) + lokaler FLUX-Modell-Cache + Auto-Backup
 
-This project changes the entrypoint of the official `runpod/comfyui:cuda12.8` image.
-The official image contains ComfyUI in `/opt/comfyui-baked`. The usual
-`/start.sh` tries to sync its application to `/workspace`, which fails with
-`rsync mkstemp Operation not permitted` when Global Volume is mounted there.
+Experimentelle Testversion fuer Runpod. Basierend auf dem bisherigen `pulid-test`-Image.
+Das bereits funktionierende Image `ghcr.io/victor0484/comfyui-global:pulid-test`
+wird NICHT ueberschrieben.
 
-This image launches ComfyUI directly from `/opt/comfyui-baked` and uses
-`/workspace` only to READ model files from the existing Global Volume.
-It supports the following model layouts:
+## Architektur
 
-- `/workspace/models/checkpoints`, `models/loras`, etc.
-- `/workspace/runpod-slim/ComfyUI/models/checkpoints`, etc.
+- `/opt/comfyui-baked`: ComfyUI + PuLID + ReActor aus Docker-Image
+- `/workspace`: Runpod Global Volume (FUSE/geesefs), keine Local/Network Volume Disk
+- `/workspace/models`: dauerhafte FLUX/PuLID/ReActor-Modelle
+- `/tmp/comfy-model-cache`: lokaler Cache der wichtigsten FLUX/PuLID-Dateien
+- `/opt/comfyui-baked/models/insightface`: lokale ReActor-Modelle aus Global Volume
+- `/tmp/comfyui`: laufende User/Output/Input-Daten
+- `/workspace/comfy-backup`: Auto-Backup, 30-Tage-Papierkorb
+- ReActor-NSFW-Klassifikation ist im privaten Docker-Image deaktiviert. PuLID, FLUX und die Sicherung bleiben unveraendert.
 
-## Publish using GitHub Actions (no local Docker installation)
+**Achtung:** Cache-Dateien muessen nach jedem neuen Pod-Start wieder vom Global Volume
+kopiert werden. Der allererste Start kann dadurch spaeter bereit sein. Mehrfache Modellwechsel
+innerhalb einer Sitzung profitieren von schnellem lokalem Modellzugriff. Bei nur einer
+Generierung pro Pod-Start ist der Gewinn nicht garantiert. Die Kompression/Quantisierung
+von FLUX wird durch das Caching nicht veraendert.
 
-1. Create a public GitHub repo named `comfyui-global` (without README).
-2. Upload all files, preserving `.github/workflows/publish.yml`.
-3. Open Actions, enable workflows if asked, and run `Build and publish ComfyUI Docker image` manually if it did not start automatically.
-4. After the build is green, open your GitHub profile's Packages section and find `comfyui-global`.
-5. Open the package's settings and set Visibility to Public. (Public image means anybody can pull the software image; do NOT put models, images, access tokens or personal data in the repo.)
-6. Your image address is `ghcr.io/YOUR_LOWERCASE_GITHUB_USERNAME/comfyui-global:latest`.
+## 1. Im noch laufenden PuLID-Pod sichern
 
-## Runpod template
+Erst den funktionierenden Level-4-Workflow in ComfyUI speichern, dann im SSH-Terminal:
 
-- Image: `ghcr.io/YOUR_LOWERCASE_GITHUB_USERNAME/comfyui-global:latest`
-- Container Disk: 150 GB (ephemeral, lost when Pod deleted)
-- Network Volume: none
-- Local Volume/Volume Disk: none
-- Global Volume: attach the existing one at `/workspace`
-- HTTP ports: `8188,8888` (if using Jupyter, otherwise only `8188`)
-- Docker Start Command: empty (the image sets its own ENTRYPOINT)
-- Environment variable: `JUPYTER_PASSWORD` set to a strong randomly-generated secret to enable JupyterLab on 8888.
+```bash
+backup-comfy-data
+find /workspace/comfy-backup/user -type f -path '*/workflows/*.json'
+```
 
-ComfyUI: Connect to HTTP port 8188.
-JupyterLab: Connect to HTTP port 8888 and supply the secret token.
-Do not enable public tokenless Jupyter access.
+## 2. ReActor-Gewichte einmalig ins Global Volume laden
 
-## Keep output files after Pod deletion
+Im laufenden PuLID-Pod (noch nicht loeschen!):
 
-Output and user files are intentionally stored locally at `/tmp/comfyui`:
-ComfyUI and third-party nodes may rely on file operations Global Volume does
-not support. Before terminating the Pod, open Jupyter Terminal and run:
+```bash
+bash prepare-reactor-models.sh
+```
 
-    backup-comfy-data
+Dazu `prepare-reactor-models.sh` zuerst auf den Pod bringen. Am einfachsten
+per Mac-SSH-SCP, oder per SSH in einem Editor kopieren. Alternativ ueber
+JupyterLab hochladen und dort `bash /tmp/prepare-reactor-models.sh` ausfuehren.
+Das Skript laedt die Dateien zunaechst auf die Container Disk und kopiert sie
+mit Hashpruefung auf das Global Volume. Bei bestehendem Modell-Hashfehler stoppt es.
+Zielpfade:
 
-The script copies input, output and user files to `/workspace/comfy-backup`.
-Inspect the backup before deleting the Pod. **Nothing is automatically backed up.**
-On the next Pod, the starter script restores `input` and `user` from this backup;
-previous `output` files remain on Global Volume under `/workspace/comfy-backup/output`.
+```
+/workspace/models/insightface/inswapper_128.onnx
+/workspace/models/insightface/models/buffalo_l/*.onnx
+/workspace/models/facerestore_models/GFPGANv1.4.pth
+```
 
-Runtime-installed custom nodes and packages are NOT persistent across Pod
-deletions. Add them to this image and rebuild for long-term persistence.
+Hinweis: InsightFace/inswapper Modelldateien haben Nutzungsbedingungen; offizielle
+ReActor-Dokumentation beachten (vortrainierte InsightFace Modelle nur nicht-kommerzielle Forschung).
 
-This is a reference configuration verified against the public Dockerfile and
-CLI arguments of Runpod/ComfyUI, but it has NOT been end-to-end deployed.
+## 3. Neuen Branch fuer eine Testversion erstellen
+
+In GitHub auf Branch `pulid-test` wechseln und daraus Branch `reactor-cache` erzeugen.
+Aus diesem ZIP die sichtbaren Dateien im Hauptverzeichnis ersetzen/hochladen:
+
+- `Dockerfile`
+- `start-comfy.sh`
+- `extra_model_paths.yaml`
+- `patch-pulid.py` (wie bisher)
+- `backup-comfy-data.sh` (wie bisher)
+- `cache-models.py` (neu)
+- `patch-reactor-nsfw.py` (neu: deaktiviert die ReActor-NSFW-Pruefung waehrend des Docker-Builds)
+- `auto-backup-comfy.py` (Version mit Papierkorb, neu)
+
+Versteckte `.github`-Datei NICHT per Drag-and-drop benoetigt:
+Im Branch `reactor-cache` die vorhandene `.github/workflows/publish.yml`
+im Webeditor oeffnen und ihren Inhalt durch die gleichnamige Datei aus dem ZIP ersetzen.
+Direkter Pfad: https://github.com/Victor0484/comfyui-global/blob/reactor-cache/.github/workflows/publish.yml
+
+Commit in `reactor-cache`; GitHub Actions baut:
+
+```
+ghcr.io/victor0484/comfyui-global:reactor-cache
+```
+
+Das `pulid-test`-Image bleibt unveraendert. CI-Erfolg belegt nur den Build, nicht
+die tatsaechliche Kompatibilitaet der ReActor-Nodes zur Laufzeit.
+
+## 4. Runpod-Template fuer neues Image
+
+- Image `ghcr.io/victor0484/comfyui-global:reactor-cache`
+- Container Disk 150 GB
+- Volume Disk 0 GB, kein Network Volume
+- Vorhandenes Global Volume `weekly_lime_impala` unter `/workspace`
+- HTTP-Ports 8188 und (optional) 8888
+- `Start Command` leer lassen
+- Variable `JUPYTER_PASSWORD` setzen, falls Jupyter gewuenscht
+- Variable `COMFY_CACHE_MODE=selected` (optional; Standard)
+
+Waehrend des Pod-Starts wird der Cache befuellt. **ComfyUI wird erst danach gestartet.**
+Das kann laenger dauern als ohne Cache. Log:
+
+```
+/tmp/comfy-model-cache.log
+```
+
+Achtung: In diesem Testimage wird der Cache bei jedem Neustart erneut angelegt.
+Wenn die Container Disk zu klein ist, kann der Cache Kopien ueberspringen;
+FLUX bleibt ueber den Global-Volume-Pfad verfuegbar.
+
+## 5. Nach dem Pod-Start testen
+
+1. ComfyUI ueber die neue Pod-ID und Port 8188 oeffnen.
+2. In Node-Suche `PuLID` und `ReActor` pruefen.
+3. Level-4-Workflow ausfuehren (Regressionstest).
+4. ReActor: `ReActorFaceSwap`-Node ausprobieren, `inswapper_128.onnx`
+   als Modell und zunaechst `none` als Face Restore auswaehlen.
+5. Logs per SSH:
+
+```
+grep -iE 'reactor|failed|error|traceback' /tmp/comfyui/user/comfyui.log | tail -n 50
+tail -n 40 /tmp/comfy-model-cache.log
+tail -n 40 /tmp/comfy-autobackup.log
+```
+
+Beachte: ReActor verarbeitet Gesichter als Postprocessing eines vorhandenen Bildes.
+Es ersetzt PuLID nicht, sondern ergaenzt es. Ein GPU-Provider muss zur installierten
+CUDA/ONNX-Runtime passen; bei Fehlermeldungen unbedingt die Runpod-Logs nutzen.
+
+## 6. Besondere Hinweise
+
+- Das Projekt wurde syntaktisch und mit Testdateien auf die Cache-Logik geprueft.
+  Ein realer Docker-Build mit GPU und ReActor-Praxisworkflow muss bei Runpod erfolgen.
+- Die ReActor-Pakete und das Repo werden bei jedem Image-Build neu aus offiziellen
+  Quellen geholt. Bei spaeteren Builds koennen Abhaengigkeiten sich aendern.
+- GitHub-Zweig `reactor-cache` erstmal nicht mit `pulid-test` zusammenfuehren.
+- Das Auto-Backup spiegelt nur Workflows, Input, Output, kleine Settings; es
+  loescht NIE `/workspace/models` und hat 30 Tage Papierkorb-Retention.
+- Alle Modelldateien bleiben dauerhaft auf dem Global Volume. Das Cache-Skript
+  schreibt keine temp/rename-Dateien dorthin.
+
+## NSFW-Filter-Aenderung
+
+Das zusaetzliche `patch-reactor-nsfw.py` ersetzt nach dem Klonen von
+`ComfyUI-ReActor` ausschliesslich die Funktion `nsfw_image(...)` durch eine
+Pass-through-Pruefung, die immer `False` zurueckgibt. ReActor fuehrt damit
+keine NSFW-Klassifikation aus und startet keinen Download eines NSFW-Detektors.
+Das ist eine Anpassung dieses eigenen Docker-Images, nicht der offiziellen
+ReActor-Erweiterung. Andere ComfyUI-Nodes oder Filter werden nicht veraendert.
+
+Die Docker-Build-Pruefung bricht ab, falls das ReActor-Projekt die relevante
+Datei oder den Aufruf umbenennt, statt unbemerkt wieder einen aktiven Filter
+zu enthalten.
+
+Nach dem Build in ComfyUI pruefen, ob ReActor-Nodes erscheinen und ein
+Face-Swap-Workflow funktioniert. In den ReActor-Logs sollte kein
+NSFW-Detektormodell mehr geladen werden.

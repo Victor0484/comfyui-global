@@ -1,4 +1,18 @@
-# New suggested Global Volume layout: /workspace/models/...
+# Search local cache first, then persistent Global Volume.
+local_cache:
+  base_path: /tmp/comfy-model-cache
+  checkpoints: checkpoints
+  diffusion_models: diffusion_models
+  text_encoders: text_encoders
+  clip: clip
+  clip_vision: clip_vision
+  loras: loras
+  vae: vae
+  controlnet: controlnet
+  upscale_models: upscale_models
+  embeddings: embeddings
+  pulid: pulid
+
 global_models:
   base_path: /workspace
   checkpoints: models/checkpoints
@@ -13,7 +27,6 @@ global_models:
   embeddings: models/embeddings
   pulid: models/pulid
 
-# Compatibility with models on your old Pod's Global Volume mount:
 legacy_models:
   base_path: /workspace/runpod-slim/ComfyUI
   checkpoints: models/checkpoints

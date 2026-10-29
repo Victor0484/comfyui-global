@@ -1,89 +1,57 @@
-
 #!/usr/bin/env bash
 set -euo pipefail
 
 COMFY_ROOT=/opt/comfyui-baked
 DATA_ROOT=/tmp/comfyui
 
-# Check ComfyUI installation
 if [[ ! -f "${COMFY_ROOT}/main.py" ]]; then
-  echo "ERROR: ComfyUI not found at ${COMFY_ROOT}/main.py" >&2
+  echo "ERROR: ComfyUI missing at ${COMFY_ROOT}" >&2
   exit 1
 fi
+mkdir -p "${DATA_ROOT}/input" "${DATA_ROOT}/output" \
+  "${DATA_ROOT}/temp" "${DATA_ROOT}/user"
 
-# Keep runtime files on the container disk,
-# never on the Global Volume.
-mkdir -p \
-  "${DATA_ROOT}/input" \
-  "${DATA_ROOT}/output" \
-  "${DATA_ROOT}/temp" \
-  "${DATA_ROOT}/user"
-
-# Restore previous inputs and user settings
-# from the Global Volume.
+# Restore workflows and input assets from previous Pods.
 for section in input user; do
   if [[ -d "/workspace/comfy-backup/${section}" ]]; then
-    cp -r \
-      "/workspace/comfy-backup/${section}/." \
-      "${DATA_ROOT}/${section}/"
+    cp -r "/workspace/comfy-backup/${section}/." "${DATA_ROOT}/${section}/"
     echo "Restored ${section} from Global Volume."
   fi
 done
 
-# Check model directories
-if [[ ! -d /workspace/models && \
-      ! -d /workspace/runpod-slim/ComfyUI/models ]]; then
-  echo "WARNING: No model directory found."
-  echo "Attach your Global Volume at /workspace."
+# Cache only your regularly used FLUX and PuLID weights, plus ReActor weights.
+# Copying occurs on EVERY new container start. No downloads from HF are used.
+echo "Caching popular models on local container disk..."
+if ! python3.12 -u /usr/local/bin/cache-models.py \
+    2>&1 | tee /tmp/comfy-model-cache.log; then
+  echo "WARNING: local model cache did not complete; global files are untouched."
 fi
 
-# Start JupyterLab when a token is configured.
+# Keep the existing JupyterLab login and explicit Runpod proxy origin.
 if [[ -n "${JUPYTER_PASSWORD:-}" ]]; then
-
-  echo "Starting JupyterLab on port 8888."
-
   JUPYTER_ARGS=(
-    --allow-root
-    --no-browser
-    --ip=0.0.0.0
-    --port=8888
+    --allow-root --no-browser --ip=0.0.0.0 --port=8888
     --ServerApp.root_dir=/
     "--IdentityProvider.token=${JUPYTER_PASSWORD}"
   )
-
-  # Fix Runpod reverse proxy origin validation.
-  # Restrict the allowed origin to this Pod.
   if [[ -n "${RUNPOD_POD_ID:-}" ]]; then
-    JUPYTER_ORIGIN="https://${RUNPOD_POD_ID}-8888.proxy.runpod.net"
-
-    JUPYTER_ARGS+=(
-      "--ServerApp.allow_origin=${JUPYTER_ORIGIN}"
-    )
-
-    echo "Jupyter allowed origin: ${JUPYTER_ORIGIN}"
-  else
-    echo "WARNING: RUNPOD_POD_ID is not set."
-    echo "Jupyter proxy login may not work."
+    JUPYTER_ARGS+=("--ServerApp.allow_origin=https://${RUNPOD_POD_ID}-8888.proxy.runpod.net")
   fi
-
-  jupyter lab "${JUPYTER_ARGS[@]}" \
-    > /tmp/comfy-jupyter.log 2>&1 &
-
+  jupyter lab "${JUPYTER_ARGS[@]}" > /tmp/comfy-jupyter.log 2>&1 &
+  echo "JupyterLab started on port 8888."
 else
-  echo "JupyterLab disabled."
-  echo "Set JUPYTER_PASSWORD to enable it."
+  echo "JupyterLab disabled (set JUPYTER_PASSWORD to enable)."
 fi
 
-# Start ComfyUI from the Docker image.
-# Model files are loaded from the Global Volume.
+# Incremental backup with 30-day trash retention.
+python3.12 -u /usr/local/bin/auto-backup-comfy.py \
+  >> /tmp/comfy-autobackup.log 2>&1 &
+echo "Incremental backup started."
+
 cd "${COMFY_ROOT}"
-
-echo "Starting ComfyUI from ${COMFY_ROOT}"
-echo "Model storage: /workspace"
-
+echo "Starting ComfyUI from ${COMFY_ROOT} on port 8188."
 exec python3.12 main.py \
-  --listen 0.0.0.0 \
-  --port 8188 \
+  --listen 0.0.0.0 --port 8188 \
   --extra-model-paths-config /etc/comfyui/extra_model_paths.yaml \
   --input-directory "${DATA_ROOT}/input" \
   --output-directory "${DATA_ROOT}/output" \
